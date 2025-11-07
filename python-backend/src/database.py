@@ -359,12 +359,18 @@ class DatabaseManager:
     # Conversion methods
     def _agent_to_model(self, agent: Agent) -> AgentModel:
         """Convert database agent to Pydantic model"""
+        # 确保 config 中的模型使用当前配置的默认模型
+        agent_config = agent.config.copy() if isinstance(agent.config, dict) else {}
+        # 强制更新模型配置为当前配置的默认模型
+        agent_config["model"] = settings.provider_default_model
+        logger.debug(f"Updated agent {agent.id} model to {settings.provider_default_model} in _agent_to_model")
+        
         return AgentModel(
             id=agent.id,
             name=agent.name,
             description=agent.description,
             agent_type=agent.agent_type,
-            config=agent.config,
+            config=agent_config,  # 使用更新后的配置
             tools=agent.tools,
             triggers=agent.triggers,
             rag_enabled=agent.rag_enabled,

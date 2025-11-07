@@ -50,13 +50,15 @@ class CopilotStreamManager:
         logger.info("CopilotStreamManager initialized")
     
     def _get_llm(self):
-        """延迟初始化 LLM"""
+        """延迟初始化 LLM - 使用正确的模型配置"""
         if self._llm is None:
             # 注意：streaming 参数应该在调用时传递，而不是在初始化时
+            # 使用 model 而不是 model_name（model_name 已弃用）
+            logger.info(f"Initializing Copilot LLM with model: {settings.provider_copilot_model}")
             self._llm = ChatOpenAI(
-                openai_api_key=settings.provider_api_key,
+                api_key=settings.provider_api_key,
                 base_url=settings.provider_base_url,
-                model_name=settings.provider_copilot_model,
+                model=settings.provider_copilot_model,  # 使用 model 而不是 model_name
                 temperature=0.3,
                 max_tokens=16000,  # 增加 max_tokens 避免截断（原始实现使用更大的值）
             )

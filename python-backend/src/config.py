@@ -64,5 +64,14 @@ settings = Settings()
 if not settings.embedding_api_key and settings.provider_api_key:
     settings.embedding_api_key = settings.provider_api_key
 
+# 重要：立即设置 OPENAI_API_KEY 环境变量，供 CrewAI 工具和其他依赖使用
+# 这必须在任何 CrewAI 工具导入之前设置
+if settings.provider_api_key:
+    os.environ["OPENAI_API_KEY"] = settings.provider_api_key
+    # 同时设置一些 CrewAI 工具可能需要的其他环境变量
+    os.environ["OPENAI_API_BASE"] = settings.provider_base_url
+    # 注意：某些工具可能需要 OPENAI_MODEL_NAME，但我们使用自定义的 ChatOpenAI 实例
+
 print(f"✅ Settings initialized with embedding model: {settings.embedding_model}")
 print(f"✅ Embedding API configured with SiliconFlow")
+print(f"✅ OPENAI_API_KEY environment variable set for CrewAI tools")

@@ -461,13 +461,39 @@ class OptimizedCrewAIAgentManager:
             logger.warning(f"Advanced memory setup failed: {str(e)}")
 
     async def _async_complete_configuration(self, agent: Agent, original_config: AgentModel):
-        """异步完成剩余配置"""
+        """异步完成剩余配置 - 包括 RAG 工具"""
         try:
             # 完成日志记录和指标上报
             logger.info(f"Async configuration pipeline completed for: {agent.role}")
 
-            # 这里可以添加更复杂的配置逻辑，但目前保持最小
-            # 例如：RAG配置、多轮会话支持等
+            # 如果启用了 RAG，添加 RAG 工具
+            if original_config.rag_enabled and original_config.rag_sources:
+                try:
+                    from .rag_manager import create_rag_tool
+                    
+                    rag_tools = []
+                    for source_id in original_config.rag_sources:
+                        try:
+                            # 为每个 RAG 源创建一个工具
+                            rag_tool = await create_rag_tool(
+                                collection_name=source_id,
+                                description=f"Search knowledge base: {source_id}"
+                            )
+                            rag_tools.append(rag_tool)
+                            logger.info(f"Added RAG tool for source: {source_id}")
+                        except Exception as e:
+                            logger.warning(f"Failed to create RAG tool for {source_id}: {str(e)}")
+                            continue
+                    
+                    # 将 RAG 工具添加到 agent
+                    if rag_tools and hasattr(agent, 'tools'):
+                        if agent.tools is None:
+                            agent.tools = []
+                        agent.tools.extend(rag_tools)
+                        logger.info(f"Successfully added {len(rag_tools)} RAG tools to agent {agent.role}")
+                    
+                except Exception as e:
+                    logger.warning(f"Failed to add RAG tools: {str(e)}")
 
         except Exception as e:
             logger.debug(f"Async config completion warning: {str(e)}")

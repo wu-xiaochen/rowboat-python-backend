@@ -1,6 +1,7 @@
 import logging
 import json
 import uuid
+import asyncio
 from contextlib import asynccontextmanager
 from typing import List, Optional
 from datetime import datetime
@@ -44,6 +45,7 @@ except ImportError as e:
     INTEGRATED_MANAGER_AVAILABLE = False
 
 from .database import DatabaseManager
+import os
 
 # Import simplified authentication for real functionality
 from .simplified_auth import get_current_user_simple, SimpleAuth
@@ -140,6 +142,12 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager with performance optimization"""
     # Startup
     logger.info("Starting Rowboat Python Backend with Performance Optimization...")
+    
+    # 设置 OPENAI_API_KEY 环境变量（供 CrewAI 工具和 RAG 使用）
+    if settings.provider_api_key and not os.getenv("OPENAI_API_KEY"):
+        os.environ["OPENAI_API_KEY"] = settings.provider_api_key
+        logger.info("✅ OPENAI_API_KEY environment variable set for CrewAI tools and RAG")
+    
     try:
         await db_manager.initialize()
         await rag_manager.initialize()
@@ -286,25 +294,58 @@ async def get_agent(
         if current_user.get("role") != "admin" and "admin" in agent_id:
             raise HTTPException(status_code=404, detail="Agent not found or access denied")
 
-        mock_agent = Agent(
-            id=agent_id,
-            name=f"智能体_{agent_id[:8]}",
-            description=f"用户{current_user['username']}的个性化AI助手",
-            agent_type="custom",
-            config={
-                "model": settings.provider_default_model,
-                "temperature": 0.7,
-                "language": "chinese",
-                "max_tokens": 2000
-            },
-            tools=["search", "analysis"],
-            triggers=["daily_report"],
-            rag_enabled=True,
-            rag_sources=["user_manuals", "product_docs"],
-            status="active",
-            created_at=now,
-            updated_at=now
-        )
+        # 尝试从数据库获取真实的 agent 配置
+        try:
+            agent_model = await db_manager.get_agent(agent_id, current_user['id'])
+            if agent_model:
+                # 如果数据库中有配置，使用数据库配置，但更新模型为当前配置的模型
+                agent_config = agent_model.config if isinstance(agent_model.config, dict) else {}
+                agent_config["model"] = settings.provider_default_model  # 强制使用配置的模型
+                mock_agent = agent_model
+                mock_agent.config = agent_config
+            else:
+                # 如果数据库中没有，创建默认配置
+                mock_agent = Agent(
+                    id=agent_id,
+                    name=f"智能体_{agent_id[:8]}",
+                    description=f"用户{current_user['username']}的个性化AI助手",
+                    agent_type="custom",
+                    config={
+                        "model": settings.provider_default_model,  # 使用配置的默认模型
+                        "temperature": 0.7,
+                        "language": "chinese",
+                        "max_tokens": 2000
+                    },
+                    tools=["search", "analysis"],
+                    triggers=["daily_report"],
+                    rag_enabled=True,
+                    rag_sources=["user_manuals", "product_docs"],
+                    status="active",
+                    created_at=now,
+                    updated_at=now
+                )
+        except Exception as e:
+            logger.warning(f"Failed to get agent from database: {str(e)}, using default config")
+            # 降级到默认配置
+            mock_agent = Agent(
+                id=agent_id,
+                name=f"智能体_{agent_id[:8]}",
+                description=f"用户{current_user['username']}的个性化AI助手",
+                agent_type="custom",
+                config={
+                    "model": settings.provider_default_model,  # 使用配置的默认模型
+                    "temperature": 0.7,
+                    "language": "chinese",
+                    "max_tokens": 2000
+                },
+                tools=["search", "analysis"],
+                triggers=["daily_report"],
+                rag_enabled=True,
+                rag_sources=["user_manuals", "product_docs"],
+                status="active",
+                created_at=now,
+                updated_at=now
+            )
 
         basic_metrics.record_api_call("get_agent")
         logger.info(f"User {current_user['id']} accessed agent {agent_id}")
@@ -1100,7 +1141,7 @@ async def create_agent_simple(
             "name": agent_request.name,
             "role": agent_role,
             "description": agent_request.description or "Created by system",
-            "model": agent_request.config.get("model", settings.provider_default_model) if isinstance(agent_request.config, dict) and "model" in agent_request.config else settings.provider_default_model,
+            "model": settings.provider_default_model,  # 始终使用配置的默认模型
             "temperature": agent_request.config.get("temperature", 0.7) if isinstance(agent_request.config, dict) and "temperature" in agent_request.config else 0.7,
             "max_tokens": agent_request.config.get("max_tokens", 2000) if isinstance(agent_request.config, dict) and "max_tokens" in agent_request.config else 2000,
             "language": "chinese"  # 强制中文环境
@@ -1190,112 +1231,141 @@ async def create_agent_simple(
         raise HTTPException(status_code=500, detail=f"Simplified agent creation failed: {str(e)}")
 
 
-# 智能体交互端点 - 修复回复中断和中文环境问题
+# 智能体交互端点 - 支持 RAG 知识库调用
 @app.post("/api/agents/{agent_id}/interact")
 async def interact_with_agent(
     agent_id: str,
     interaction_request: dict,
     current_user: dict = Depends(get_current_user)
 ):
-    """与智能体交互 - 修复回复中断和语言环境问题"""
+    """与智能体交互 - 支持 RAG 知识库调用"""
     try:
         user_message = interaction_request.get("message", "")
         logger.info(f"User {current_user['id']} interacting with agent {agent_id}: {user_message}")
 
-        # 验证智能体ID的有效性（检测不存在的智能体）
-        valid_agent_prefixes = ["agent_", "mock_agent_", "072", "cde", "system_"]
-        is_valid_agent = any(agent_id.startswith(prefix) for prefix in valid_agent_prefixes) or \
-                        len(agent_id) == 36  # UUID长度
+        # 从数据库获取智能体配置
+        try:
+            agent_model = await db_manager.get_agent(agent_id, current_user['id'])
+            if not agent_model:
+                # 尝试其他前缀验证（向后兼容）
+                valid_agent_prefixes = ["agent_", "mock_agent_", "072", "cde", "system_"]
+                is_valid_agent = any(agent_id.startswith(prefix) for prefix in valid_agent_prefixes) or \
+                                len(agent_id) == 36  # UUID长度
+                if not is_valid_agent:
+                    raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+                # 使用默认配置
+                agent_model = None
+        except Exception as e:
+            logger.warning(f"Failed to get agent from database: {str(e)}")
+            agent_model = None
 
-        if not is_valid_agent:
-            raise HTTPException(status_code=404, detail=f"Agent {agent_id} not found")
+        # 如果启用了 RAG，先进行知识库搜索
+        rag_context = ""
+        if agent_model and agent_model.rag_enabled and agent_model.rag_sources:
+            try:
+                from .rag_manager import RAGManager
+                rag_mgr = RAGManager()
+                await rag_mgr.initialize()
+                
+                # 对每个 RAG 源进行搜索
+                for source_id in agent_model.rag_sources:
+                    try:
+                        # 使用 source_id 作为 collection_name
+                        results = await rag_mgr.search(source_id, user_message, k=3)
+                        if results:
+                            rag_context += f"\n\n知识库 {source_id} 相关内容：\n"
+                            for i, doc in enumerate(results, 1):
+                                rag_context += f"{i}. {doc.page_content[:200]}...\n"
+                    except Exception as e:
+                        logger.warning(f"RAG search failed for source {source_id}: {str(e)}")
+                        continue
+                
+                await rag_mgr.cleanup()
+                
+            except Exception as e:
+                logger.error(f"RAG initialization failed: {str(e)}")
+                # RAG 失败不影响主流程，继续执行
 
-        # 分析用户消息的语言倾向
-        chinese_chars = sum(1 for c in user_message if ord(c) > 127)
-        total_chars = len(user_message)
-        chinese_ratio = chinese_chars / total_chars if total_chars > 0 else 0
+        # 构建完整的提示，包含 RAG 上下文
+        full_prompt = user_message
+        if rag_context:
+            full_prompt = f"{user_message}\n\n相关背景信息：{rag_context}"
 
-        # 根据语言分析智能体响应风格
-        if chinese_ratio > 0.7:  # 如果超过70%是中文字符
-            response_style = "纯中文专业风格"
-            language_config = "chinese"
-        elif chinese_ratio > 0.5:  # 如果超过50%是中文字符，强化中文环境
-            response_style = "中文主导专业风格"
-            language_config = "chinese_primary"
-        else:
-            response_style = "技术专业风格"
-            language_config = "balanced"
-
-        # 智能体响应生成（基于语言环境配置）
-        if language_config == "chinese":
-            agent_response = f"您好！感谢您的提问。关于您提到的'{user_message}'，我来为您详细解答："
-            agent_response += f"\n\n根据您的问题，这里提供{response_style}的专业回复。"
-            agent_response += f"\n\n【技术环境确认】当前使用的是Python+FastAPI+CrewAI技术栈，后端重构已经完成。"
-            agent_response += f"\n【语言环境】系统已自动切换至纯中文模式，避免中英文混排。"
-            agent_response += f"\n【模型信息】正在使用硅基流动提供的DeepSeek-V3.2-Exp模型。"
-            agent_response += f"\n\n如果您需要更详细的解释或其他帮助，请随时告诉我。"
-
-        elif language_config == "chinese_primary":
-            agent_response = f"您好！我收到了您的消息：'{user_message}'"
-            agent_response += f"\n\n基于您的问题内容，我将使用{response_style}进行回复。"
-            agent_response += f"\n当前系统包含以下功能模块：多智能体协作、任务执行管理、实时消息处理和配置管理。"
-            agent_response += f"\n技术架构：Python后端结合CrewAI框架，支持完整的AI智能功能。"
-            agent_response += f"\n\n系统将保持主要中文回复，确保交流的清晰和准确。"
-        else:
-            agent_response = f"感谢您的提问！关于'{user_message}'的问题："
-            agent_response += f"\n\n当前系统架构 - Python后端重构完成，集成CrewAI多智能体框架："
-            agent_response += f"\n✅ FastAPI服务运行正常"
-            agent_response += f"\n✅ Python后端与CrewAI集成"
-            agent_response += f"\n✅ 多智能体协作机制"
-            agent_response += f"\n✅ 实时任务处理能力"
-            agent_response += f"\n✅ 配置管理和监控功能"
-
-        # 根据语言偏好配置环境优化
-        switch_to_chinese = chinese_ratio > 0.6  # 如果中文比例较高
-        optimization_config = "" if switch_to_chinese else "（多语言环境已适配）"
+        # 使用 CrewAI 智能体或 LLM 处理消息
+        try:
+            # 尝试使用实际的 CrewAI agent
+            crewai_agent = agent_manager.get_agent(agent_id) if hasattr(agent_manager, 'get_agent') else None
+            
+            if crewai_agent:
+                # 使用真实的 CrewAI agent 处理
+                task_description = full_prompt
+                result = await agent_manager.execute_task(agent_id, task_description)
+                agent_response = str(result)
+            else:
+                # 如果没有找到 agent，使用 LLM 直接调用
+                from langchain_openai import ChatOpenAI
+                llm = ChatOpenAI(
+                    base_url=settings.provider_base_url,
+                    api_key=settings.provider_api_key,
+                    model=settings.provider_default_model,
+                    temperature=0.7,
+                    max_tokens=4000
+                )
+                
+                prompt = f"用户问题：{full_prompt}\n\n请提供详细、专业的回答。"
+                response = await asyncio.to_thread(llm.invoke, prompt)
+                agent_response = response.content if hasattr(response, 'content') else str(response)
+                
+        except Exception as e:
+            logger.error(f"CrewAI agent execution failed: {str(e)}")
+            # 降级到 LLM 直接调用
+            try:
+                from langchain_openai import ChatOpenAI
+                llm = ChatOpenAI(
+                    base_url=settings.provider_base_url,
+                    api_key=settings.provider_api_key,
+                    model=settings.provider_default_model,
+                    temperature=0.7,
+                    max_tokens=4000
+                )
+                prompt = f"用户问题：{full_prompt}\n\n请提供详细、专业的回答。"
+                response = await asyncio.to_thread(llm.invoke, prompt)
+                agent_response = response.content if hasattr(response, 'content') else str(response)
+            except Exception as e2:
+                logger.error(f"LLM direct call also failed: {str(e2)}")
+                raise HTTPException(status_code=500, detail=f"Agent interaction failed: {str(e2)}")
 
         response_data = {
             "agent_id": agent_id,
             "interaction_id": f"interaction_{datetime.utcnow().timestamp()}",
             "user_message": user_message,
-            "agent_response": agent_response + optimization_config,
+            "agent_response": agent_response,
             "status": "success",
             "model_used": settings.provider_default_model,
-            "language_config": language_config,
-            "chinese_ratio": round(chinese_ratio, 2),
+            "rag_enabled": agent_model.rag_enabled if agent_model else False,
+            "rag_sources_used": agent_model.rag_sources if agent_model and agent_model.rag_enabled else [],
             "timestamp": datetime.utcnow().isoformat(),
-            "processing_time_ms": 50,
             "metadata": {
                 "backend": "Python + CrewAI",
                 "ai_provider": "硅基流动",
                 "model": settings.provider_default_model,
-                "language_optimization": switch_to_chinese,
-                "response_style": response_style,
-                "type": "language_aware_response"
+                "rag_used": bool(rag_context),
+                "type": "agent_interaction"
             }
         }
 
-        basic_metrics.record_llm_request(f"Language-aware Agent: {settings.provider_default_model}")
-        logger.info(f"Agent interaction completed successfully - Language: {language_config}")
+        basic_metrics.record_llm_request(f"Agent Interaction: {settings.provider_default_model}")
+        logger.info(f"Agent interaction completed successfully for agent {agent_id}")
 
         return response_data
 
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Agent interaction failed: {str(e)}")
+        logger.error(f"Agent interaction failed: {str(e)}", exc_info=True)
         basic_metrics.record_error("agent_interaction")
 
-        # 仍然返回中文友好的错误信息
-        return {
-            "agent_id": agent_id,
-            "user_message": interaction_request.get("message", ""),
-            "agent_response": f"系统处理中遇到问题，正在启动备用响应机制。\n\n当前状态：\n✅ 后端服务正常\n✅ FastAPI响应\n✅ 智能体框架就绪\n\n系统正在加载备用中文响应，请稍后再试。\n\n错误信息：{str(e)[:80]}...",
-            "status": "degraded_but_operational",
-            "error_handled": True,
-            "fallback_chinese": True,
-            "timestamp": datetime.utcnow().isoformat()
-        }
+        raise HTTPException(status_code=500, detail=f"Agent interaction failed: {str(e)}")
 
 
 # 智能体直接创建（避免复杂配置）
@@ -1327,7 +1397,10 @@ async def create_agent_quick(
         agent_role = agent_config.get("role", "AI Assistant")
         agent_goal = agent_config.get("goal", "Assist users")
         agent_backstory = agent_config.get("backstory", "Created by Python backend")
-        agent_model = agent_config.get("model", settings.provider_default_model)
+        # 始终使用配置的默认模型，忽略前端传入的模型配置
+        agent_model = settings.provider_default_model
+        if "model" in agent_config and agent_config.get("model") != settings.provider_default_model:
+            logger.info(f"Frontend requested model '{agent_config.get('model')}', but using configured default: {settings.provider_default_model}")
 
         # 直接返回模拟的智能体对象（绕过复杂数据库操作）
         mock_agent = Agent(
@@ -1339,7 +1412,7 @@ async def create_agent_quick(
                 "role": agent_role,
                 "goal": agent_goal,
                 "backstory": agent_backstory,
-                "model": agent_model,
+                "model": settings.provider_default_model,  # 使用配置的默认模型
                 "temperature": 0.7,
                 "max_tokens": 2000
             },
