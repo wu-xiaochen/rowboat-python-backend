@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+*.pid
+server*.log
+python_backend.log
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# Test reports
+*test_report*.json
+*.json.report
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build
+dist/
+build/
+*.egg-info/
+
+# Docker
+docker-compose.override.yml
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
+
+# Large files
+*.tar.gz
+*.zip
+
+# Node modules (if any)
+node_modules/
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/

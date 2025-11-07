@@ -1,0 +1,558 @@
+# Production Docker Compose with SSL/TLS and Load Balancing
+# Advanced deployment configuration for enterprise use
+
+version: '3.8'
+
+services:
+  # Load Balancer (HAProxy)
+  loadbalancer:
+    image: haproxy:2.8-alpine
+    container_name: rowboat-loadbalancer
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8404:8404"  # HAProxy stats
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./ssl:/etc/ssl/certs:ro
+    depends_on:
+      - rowboat-backend-1
+      - rowboat-backend-2
+      - rowboat-backend-3
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Primary Backend Instance
+  rowboat-backend-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    container_name: rowboat-backend-1
+    environment:
+      - ENVIRONMENT=production
+      - SERVER_NAME=backend-1
+      - PROMETHEUS_METRICS_PORT=9090
+      - WORKERS=4
+      - MAX_REQUESTS=1000
+      - MAX_REQUESTS_JITTER=50
+      - DATABASE_URL=postgresql://rowboat:${DB_PASSWORD}@postgres:5432/rowboat?sslmode=require
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - RATE_LIMIT_STORE=redis
+      - SESSION_STORE=redis
+      - SECURE_HEADERS=true
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=https://your-domain.com
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Secondary Backend Instance
+  rowboat-backend-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    container_name: rowboat-backend-2
+    environment:
+      - ENVIRONMENT=production
+      - SERVER_NAME=backend-2
+      - PROMETHEUS_METRICS_PORT=9091
+      - WORKERS=4
+      - MAX_REQUESTS=1000
+      - MAX_REQUESTS_JITTER=50
+      - DATABASE_URL=postgresql://rowboat:${DB_PASSWORD}@postgres:5432/rowboat?sslmode=require
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - RATE_LIMIT_STORE=redis
+      - SESSION_STORE=redis
+      - SECURE_HEADERS=true
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=https://your-domain.com
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Tertiary Backend Instance
+  rowboat-backend-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.production
+    container_name: rowboat-backend-3
+    environment:
+      - ENVIRONMENT=production
+      - SERVER_NAME=backend-3
+      - PROMETHEUS_METRICS_PORT=9092
+      - WORKERS=4
+      - MAX_REQUESTS=1000
+      - MAX_REQUESTS_JITTER=50
+      - DATABASE_URL=postgresql://rowboat:${DB_PASSWORD}@postgres:5432/rowboat?sslmode=require
+      - REDIS_URL=redis://redis:6379/0
+      - QDRANT_URL=http://qdrant:6333
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - RATE_LIMIT_STORE=redis
+      - SESSION_STORE=redis
+      - SECURE_HEADERS=true
+      - LOG_LEVEL=INFO
+      - CORS_ORIGINS=https://your-domain.com
+    volumes:
+      - ./logs:/app/logs
+      - ./data:/app/data
+      - ./config:/app/config:ro
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2.0'
+        reservations:
+          memory: 1G
+          cpus: '1.0'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # PostgreSQL Database with High Availability
+  postgres:
+    image: bitnami/postgresql:16-repmgr
+    container_name: rowboat-postgres
+    environment:
+      - POSTGRESQL_DATABASE=rowboat
+      - POSTGRESQL_USERNAME=rowboat
+      - POSTGRESQL_PASSWORD=${DB_PASSWORD}
+      - POSTGRESQL_POSTGRES_PASSWORD=${DB_ADMIN_PASSWORD}
+      - REPMGR_PASSWORD=${REPMGR_PASSWORD}
+      - REPMGR_PRIMARY_HOST=postgres
+      - REPMGR_PRIMARY_PORT=5432
+      - REPMGR_PARTNER_NODES=postgres,postgres-replica
+      - REPMGR_NODE_NAME=postgres
+      - REPMGR_NODE_NETWORK_NAME=postgres
+      - POSTGRESQL_ENABLE_TLS=yes
+      - POSTGRESQL_TLS_CERT_FILE=/opt/bitnami/postgresql/certs/tls.crt
+      - POSTGRESQL_TLS_KEY_FILE=/opt/bitnami/postgresql/certs/tls.key
+      - POSTGRESQL_TLS_CA_FILE=/opt/bitnami/postgresql/certs/ca.crt
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/bitnami/postgresql
+      - ./ssl/postgres:/opt/bitnami/postgresql/certs:ro
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+
+  # PostgreSQL Replica
+  postgres-replica:
+    image: bitnami/postgresql:16-repmgr
+    container_name: rowboat-postgres-replica
+    environment:
+      - POSTGRESQL_DATABASE=rowboat
+      - POSTGRESQL_USERNAME=rowboat
+      - POSTGRESQL_PASSWORD=${DB_PASSWORD}
+      - POSTGRESQL_POSTGRES_PASSWORD=${DB_ADMIN_PASSWORD}
+      - REPMGR_PASSWORD=${REPMGR_PASSWORD}
+      - REPMGR_PRIMARY_HOST=postgres
+      - REPMGR_PRIMARY_PORT=5432
+      - REPMGR_PARTNER_NODES=postgres,postgres-replica
+      - REPMGR_NODE_NAME=postgres-replica
+      - REPMGR_NODE_NETWORK_NAME=postgres-replica
+      - REPMGR_ROLE=standby
+      - POSTGRESQL_ENABLE_TLS=yes
+      - POSTGRESQL_TLS_CERT_FILE=/opt/bitnami/postgresql/certs/tls.crt
+      - POSTGRESQL_TLS_KEY_FILE=/opt/bitnami/postgresql/certs/tls.key
+      - POSTGRESQL_TLS_CA_FILE=/opt/bitnami/postgresql/certs/ca.crt
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_replica_data:/bitnami/postgresql
+      - ./ssl/postgres:/opt/bitnami/postgresql/certs:ro
+    depends_on:
+      - postgres
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "10"
+
+  # Redis Cluster for Session Management and Caching
+  redis:
+    image: bitnami/redis-cluster:7.2
+    container_name: rowboat-redis
+    environment:
+      - REDIS_CLUSTER_REPLICAS=1
+      - REDIS_CLUSTER_ANNOUNCE_IP=127.0.0.1
+      - REDIS_CLUSTER_DYNAMIC_IPS=no
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_NODES=redis-node-0 redis-node-1 redis-node-2 redis-node-3 redis-node-4 redis-node-5
+      - REDIS_CLUSTER_CREATOR=yes
+      - REDIS_TLS_ENABLED=yes
+      - REDIS_TLS_CERT_FILE=/opt/bitnami/redis/certs/tls.crt
+      - REDIS_TLS_KEY_FILE=/opt/bitnami/redis/certs/tls.key
+      - REDIS_TLS_CA_FILE=/opt/bitnami/redis/certs/ca.crt
+      - REDIS_TLS_PORT=6379
+    ports:
+      - "6379-6384:6379-6384"
+    volumes:
+      - redis_data:/bitnami/redis/data
+      - ./ssl/redis:/opt/bitnami/redis/certs:ro
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
+
+  # Qdrant Vector Database
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: rowboat-qdrant
+    environment:
+      - QDRANT__SERVICE__GRPC_PORT=6334
+      - QDRANT__SERVICE__HTTP_PORT=6333
+      - QDRANT__TLS__CERT=/qdrant/certs/tls.crt
+      - QDRANT__TLS__KEY=/qdrant/certs/tls.key
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+      - ./ssl/qdrant:/qdrant/certs:ro
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 1G
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:6333/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Prometheus for Metrics Collection
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: rowboat-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+      - '--enable-feature=exemplar-storage'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alerts:/etc/prometheus/alerts:ro
+      - prometheus_data:/prometheus
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Grafana for Monitoring Dashboard
+  grafana:
+    image: grafana/grafana:latest
+    container_name: rowboat-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_SECURITY_COOKIE_SAMESITE=strict
+      - GF_SECURITY_COOKIE_SECURE=true
+      - GF_SERVER_PROTOCOL=https
+      - GF_SERVER_CERT_FILE=/etc/grafana/certs/tls.crt
+      - GF_SERVER_CERT_KEY=/etc/grafana/certs/tls.key
+      - GF_ALERTING_ENABLED=true
+      - GF_UNIFIED_ALERTING_ENABLED=true
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./monitoring/grafana/dashboards:/etc/grafana/dashboards:ro
+      - ./ssl/grafana:/etc/grafana/certs:ro
+    depends_on:
+      - prometheus
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Let's Encrypt Certificate Manager
+  certbot:
+    image: certbot/certbot:latest
+    container_name: rowboat-certbot
+    volumes:
+      - ./ssl:/etc/letsencrypt
+      - ./letsencrypt:/var/lib/letsencrypt
+    command: certonly --webroot --webroot-path=/var/lib/letsencrypt
+                    --email ${SSL_EMAIL}
+                    --agree-tos
+                    --no-eff-email
+                    -d ${SSL_DOMAINS}
+    networks:
+      - rowboat-network
+    restart: "no"
+
+  # Log Aggregation (ELK Stack)
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: rowboat-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.enabled=true
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - bootstrap.memory_lock=true
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=85%
+      - cluster.routing.allocation.disk.watermark.high=90%
+      - cluster.routing.allocation.disk.watermark.flood_stage=95%
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.0
+    container_name: rowboat-logstash
+    volumes:
+      - ./logging/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
+    depends_on:
+      - elasticsearch
+    ports:
+      - "5044:5044"
+      - "9600:9600"
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: rowboat-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD}
+      - SERVER_SSL_ENABLED=true
+      - SERVER_SSL_CERTIFICATE=/etc/kibana/certs/tls.crt
+      - SERVER_SSL_KEY=/etc/kibana/certs/tls.key
+    ports:
+      - "5601:5601"
+    volumes:
+      - kibana_data:/usr/share/kibana/data
+      - ./ssl/kibana:/etc/kibana/certs:ro
+    depends_on:
+      - elasticsearch
+    networks:
+      - rowboat-network
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # Automated Backup Service
+  backup-service:
+    image: alpine:latest
+    container_name: rowboat-backup
+    environment:
+      - BACKUP_SCHEDULE=0 2 * * *  # Daily at 2 AM
+      - BACKUP_RETENTION_DAYS=30
+      - S3_BUCKET=${BACKUP_S3_BUCKET}
+      - S3_ACCESS_KEY=${BACKUP_S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${BACKUP_S3_SECRET_KEY}
+      - S3_REGION=${BACKUP_S3_REGION}
+    volumes:
+      - ./backup.sh:/usr/local/bin/backup.sh:ro
+      - ./data:/backup/data:ro
+      - ./ssl:/backup/ssl:ro
+      - ./config:/backup/config:ro
+    depends_on:
+      - postgres
+      - redis
+      - qdrant
+    networks:
+      - rowboat-network
+    restart: "no"
+
+networks:
+  rowboat-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+  postgres_replica_data:
+    driver: local
+  redis_data:
+    driver: local
+  qdrant_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  elasticsearch_data:
+    driver: local
+  kibana_data:
+    driver: local
