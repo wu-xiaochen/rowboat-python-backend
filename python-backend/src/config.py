@@ -6,10 +6,10 @@ from pydantic import Field
 
 class Settings(BaseSettings):
     # API Configuration
-    provider_base_url: str = Field(..., env="PROVIDER_BASE_URL")
-    provider_api_key: str = Field(..., env="PROVIDER_API_KEY")
-    provider_default_model: str = Field(..., env="PROVIDER_DEFAULT_MODEL")
-    provider_copilot_model: str = Field(..., env="PROVIDER_COPILOT_MODEL")
+    provider_base_url: str = Field(default="https://api.siliconflow.cn/v1", env="PROVIDER_BASE_URL")
+    provider_api_key: str = Field(default="", env="PROVIDER_API_KEY")
+    provider_default_model: str = Field(default="deepseek-ai/DeepSeek-V3.2-Exp", env="PROVIDER_DEFAULT_MODEL")
+    provider_copilot_model: str = Field(default="deepseek-ai/DeepSeek-V3.2-Exp", env="PROVIDER_COPILOT_MODEL")
 
     # Server Configuration
     host: str = Field("0.0.0.0", env="HOST")
@@ -57,15 +57,8 @@ class Settings(BaseSettings):
         case_sensitive = False
 
 
-# Global settings instance - 使用所有环境变量
-settings = Settings(
-    # 确保可以从现有环境变量中读取
-    provider_base_url=os.getenv("PROVIDER_BASE_URL", "https://api.siliconflow.cn/v1"),
-    provider_api_key=os.getenv("PROVIDER_API_KEY", ""),
-    provider_default_model=os.getenv("PROVIDER_DEFAULT_MODEL", "deepseek-ai/DeepSeek-V3.2-Exp"),
-    provider_copilot_model=os.getenv("PROVIDER_COPILOT_MODEL", "deepseek-ai/DeepSeek-V3.2-Exp"),
-    embedding_api_key=os.getenv("EMBEDDING_API_KEY", os.getenv("PROVIDER_API_KEY", "")),
-)
+# Global settings instance - 直接从 .env 文件读取，不传入默认值让 pydantic 自动处理
+settings = Settings()
 
 # 如果EMBEDDING_API_KEY未单独设置，使用PROVIDER_API_KEY作为后备
 if not settings.embedding_api_key and settings.provider_api_key:
