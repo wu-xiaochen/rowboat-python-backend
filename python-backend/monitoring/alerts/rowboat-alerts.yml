@@ -1,0 +1,253 @@
+groups:
+  - name: rowboat.rules
+    rules:
+      # Backend Health Alerts
+      - alert: BackendDown
+        expr: up{job="rowboat-backend"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: devops
+        annotations:
+          summary: "Rowboat backend instance is down"
+          description: "Backend instance {{ $labels.instance }} has been down for more than 1 minute."
+
+      - alert: HighCPUUsage
+        expr: (100 - (avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100)) > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: performance
+        annotations:
+          summary: "High CPU usage detected"
+          description: "CPU usage is above 80% on {{ $labels.instance }} for more than 5 minutes."
+
+      - alert: HighMemoryUsage
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: performance
+        annotations:
+          summary: "High memory usage detected"
+          description: "Memory usage is above 85% on {{ $labels.instance }} for more than 5 minutes."
+
+      - alert: HighDiskUsage
+        expr: (1 - (node_filesystem_avail_bytes{fstype!="tempfs"} / node_filesystem_size_bytes{fstype!="tempfs"})) * 100 > 90
+        for: 5m
+        labels:
+          severity: critical
+          team: infrastructure
+        annotations:
+          summary: "High disk usage detected"
+          description: "Disk usage is above 90% on {{ $labels.instance }} for more than 5 minutes."
+
+      # Response Time Alerts
+      - alert: SlowAPIResponse
+        expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: performance
+        annotations:
+          summary: "API response time too slow"
+          description: "95th percentile response time is above 1 second for {{ $labels.method }} {{ $labels.path }} on {{ $labels.instance }}."
+
+      - alert: VerySlowAPIResponse
+        expr: histogram_quantile(0.99, rate(http_request_duration_seconds_bucket[5m])) > 5
+        for: 2m
+        labels:
+          severity: critical
+          team: performance
+        annotations:
+          summary: "API response extremely slow"
+          description: "99th percentile response time is above 5 seconds for {{ $labels.method }} {{ $labels.path }} on {{ $labels.instance }}."
+
+      # Error Rate Alerts
+      - alert: HighErrorRate
+        expr: (rate(http_requests_total{status=~"4..|5.."}[5m]) / rate(http_requests_total[5m])) * 100 > 10
+        for: 5m
+        labels:
+          severity: warning
+          team: devops
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is above 10% for {{ $labels.method }} {{ $labels.path }} on {{ $labels.instance }}."
+
+      - alert: CriticalErrorRate
+        expr: (rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])) * 100 > 5
+        for: 3m
+        labels:
+          severity: critical
+          team: devops
+        annotations:
+          summary: "Critical error rate detected"
+          description: "5xx error rate is above 5% for {{ $labels.method }} {{ $labels.path }} on {{ $labels.instance }}."
+
+      # Login Rate Alerts
+      - alert: HighLoginFailureRate
+        expr: (rate(login_failures_total[5m]) / rate(login_attempts_total[5m])) * 100 > 50
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "High login failure rate"
+          description: "Login failure rate is above 50% from {{ $labels.source_ip }}."
+
+      - alert: BruteForceAttack
+        expr: rate(login_failures_total[1m]) > 10
+        for: 2m
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "Potential brute force attack detected"
+          description: "More than 10 login failures per minute from {{ $labels.source_ip }}."
+
+      # Database Alerts
+      - alert: DatabaseConnectionFailed
+        expr: database_connections_active == 0
+        for: 30s
+        labels:
+          severity: critical
+          team: database
+        annotations:
+          summary: "Database connection failed"
+          description: "No active database connections on {{ $labels.instance }}."
+
+      - alert: HighDatabaseLoad
+        expr: database_query_duration_seconds / database_queries_total > 1
+        for: 5m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "High database load"
+          description: "Database query duration is above 1 second on {{ $labels.instance }}."
+
+      - alert: DatabaseDiskSpaceLow
+        expr: (1 - (database_disk_free_bytes / database_disk_total_bytes)) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: database
+        annotations:
+          summary: "Database disk space running low"
+          description: "Database disk usage is above 85% on {{ $labels.instance }}."
+
+      # Redis Alerts
+      - alert: RedisDown
+        expr: redis_up == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: infrastructure
+        annotations:
+          summary: "Redis server is down"
+          description: "Redis server {{ $labels.instance }} is down."
+
+      - alert: RedisMemoryUsageHigh
+        expr: (redis_memory_used_bytes / redis_memory_max_bytes) * 100 > 85
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Redis memory usage high"
+          description: "Redis memory usage is above 85% on {{ $labels.instance }}."
+
+      # Load Balancer Alerts
+      - alert: LoadBalancerDown
+        expr: up{job="haproxy"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: infrastructure
+        annotations:
+          summary: "HAProxy load balancer is down"
+          description: "HAProxy instance {{ $labels.instance }} is down."
+
+      - alert: HighActiveConnections
+        expr: haproxy_server_current_sessions / haproxy_server_limit_sessions * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "High active connection count"
+          description: "Active connections are above 80% of session limit on {{ $labels.server }} {{ $labels.backend }}."
+
+      # Security Alerts
+      - alert: RateLimitExceeded
+        expr: rate_limit_exceeded_total[1m] > 10
+        for: 1m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Rate limit exceeded frequently"
+          description: "Rate limit exceeded {{ $value }} times in the last minute from {{ $labels.source_ip }}."
+
+      # SSL Certificate Expiry
+      - alert: SSLCertificateExpiringSoon
+        expr: ssl_certificate_expiry_seconds / (24 * 60 * 60) < 30
+        for: 5m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "SSL certificate expiring soon"
+          description: "SSL certificate for {{ $labels.domain }} expires in {{ $value }} days."
+
+      - alert: SSLCertificateExpiringVerySoon
+        expr: ssl_certificate_expiry_seconds / (24 * 60 * 60) < 7
+        for: 5m
+        labels:
+          severity: critical
+          team: infrastructure
+        annotations:
+          summary: "SSL certificate expiring very soon"
+          description: "SSL certificate for {{ $labels.domain }} expires in {{ $value }} days."
+
+      # Application-Specific Alerts
+      - alert: CrewAIAgentFailure
+        expr: crewai_agent_failures_total[5m] > 5
+        for: 5m
+        labels:
+          severity: warning
+          team: ai-ops
+        annotations:
+          summary: "CrewAI agent failures detected"
+          description: "{{ $value }} CrewAI agent failures in the last 5 minutes."
+
+      - alert: CrewAIHighLatency
+        expr: histogram_quantile(0.95, rate(crewai_operation_duration_seconds_bucket[5m])) > 30
+        for: 10m
+        labels:
+          severity: warning
+          team: ai-ops
+        annotations:
+          summary: "High CrewAI operation latency"
+          description: "95th percentile CrewAI operation duration is above 30 seconds for {{ $labels.operation }}."
+
+      # Backup Alerts
+      - alert: BackupFailed
+        expr: backup_success == 0
+        for: 1m
+        labels:
+          severity: critical
+          team: infrastructure
+        annotations:
+          summary: "Backup operation failed"
+          description: "Most recent backup attempt failed at {{ $labels.last_attempt_time }}."
+
+      - alert: BackupStaled
+        expr: time() - backup_last_successful_timestamp > 86400 * 2  # 2 days
+        for: 1m
+        labels:
+          severity: warning
+          team: infrastructure
+        annotations:
+          summary: "Backup is stale"
+          description: "No successful backup found in the last 2 days.",
